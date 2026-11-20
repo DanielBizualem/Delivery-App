@@ -8,16 +8,14 @@ cloudinary.config({
     api_secret: process.env.CLOUDINARY_API_SECRET,
 })
 
-export function uploadImage(buffer, delivery){
-    return new Promise((resolve, reject)=>{
-        cloudinary.uploader.upload_stream({resource_type: 'auto', folder: delivery}, (error, result)=>{
-            if(error){
-                reject(error)
-            }else{
-                resolve(result)
-            }
-        }).end(buffer)
-    })
-}
+export function uploadImage(buffer, folder = "delivery") {
+    return new Promise((resolve, reject) => {
+      cloudinary.uploader
+        .upload_stream({ folder, resource_type: "image" }, (err, result) =>
+          err ? reject(err) : resolve({ url: result.secure_url, publicId: result.public_id })
+        )
+        .end(buffer);
+    });
+  }
 
 export const deleteImage = (publicId) => publicId ? cloudinary.uploader.destroy(publicId) : Promise.resolve();
