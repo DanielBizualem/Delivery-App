@@ -9,15 +9,12 @@ const credentialSchema = new mongoose.Schema(
       required: true,
       unique: true, // one credential per user
     },
-
     passwordHash: {
       type: String,
       required: true,
       select: false, // never returned unless explicitly requested
     },
-
     passwordChangedAt: { type: Date },
-
     failedAttempts: { type: Number, default: 0 },
     lockUntil: { type: Date },
     lastLoginAt: { type: Date },

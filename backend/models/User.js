@@ -27,7 +27,6 @@ const parentSchema = new mongoose.Schema(
 const userSchema = new mongoose.Schema(
   {
     fullName: { type: String, required: true, trim: true },
-
     phone: {
       type: String,
       required: true,
