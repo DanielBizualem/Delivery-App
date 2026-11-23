@@ -1,5 +1,8 @@
 import { registerUser } from "../../services/auth/service.js";
 import { AppError } from "../../utils/app-error.js";
+import { refreshCookie, clearCookie } from "../../utils/generateToken.js";
+import { loginUser } from "../../services/auth/service.js";
+import { refreshTokens } from "../../services/auth/service.js";
 
 const PRIVILEGED_ROLES = ["admin", "Courier"];
 
@@ -34,6 +37,54 @@ export async function register(req, res, next) {
         createdAt: user.createdAt,
       },
     });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function login(req, res, next) {
+  try {
+    const { phone, password } = req.body;
+    const { user, accessToken, refreshToken } = await loginUser({ phone, password });
+
+    res.cookie("refreshToken", refreshToken, refreshCookie);
+    res.json({
+      message: "Login successful",
+      accessToken,
+      user: {
+        id: user._id,
+        fullName: user.fullName,
+        phone: user.phone,
+        email: user.email,
+        role: user.role,
+        status: user.status,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function refresh(req, res, next) {
+  try {
+    const header = req.headers.authorization || "";
+    const accessToken = header.startsWith("Bearer ") ? header.slice(7) : null;
+
+    const tokens = await refreshTokens(accessToken, req.cookies?.refreshToken);
+
+    res.cookie("refreshToken", tokens.refreshToken, refreshCookie);
+    res.json({ accessToken: tokens.accessToken });
+  } catch (err) {
+    res.clearCookie("refreshToken", clearCookie);
+    next(err);
+  }
+}
+
+export async function logout(req, res, next) {
+  try {
+    await logoutSession(req.cookies?.refreshToken);
+    res.clearCookie("refreshToken", clearCookie);
+    res.json({ message: "Logged out" });
   } catch (err) {
     next(err);
   }

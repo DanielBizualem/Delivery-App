@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 export const ROLES = ["admin", "Courier", "user"];
 
 // remove spaces, dashes, brackets: "+251 91-123 (4567)" -> "+251911234567"
-const normalizePhone = (v) => (v ? v.replace(/[\s\-()]/g, "") : v);
+export const normalizePhone = (v) => (v ? v.replace(/[\s\-()]/g, "") : v);
 const PHONE_REGEX = /^\+?[0-9]{9,15}$/;
 
 const parentSchema = new mongoose.Schema(
