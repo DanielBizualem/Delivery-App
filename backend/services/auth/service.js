@@ -1,14 +1,24 @@
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
-import { generateAccessToken } from "../../utils/generateToken.js";
-import { generateRefreshToken } from "../../utils/generateToken.js";
-import Credential from "../../models/Credential.js";
-import { AppError } from "../../utils/app-error.js";
-import User, {ROLES, normalizePhone} from "../../models/User.js";
+import jwt from "jsonwebtoken";
 
+import Credential from "../../models/Credential.js";
+import User, { ROLES, normalizePhone } from "../../models/User.js";
+import { AppError } from "../../utils/app-error.js";
+import {
+  generateAccessToken,
+  generateRefreshToken,getTokenExpiry,
+  sha256,
+} from "../../utils/generateToken.js";
 
 const SALT_ROUNDS = 12;
 const MIN_PASSWORD_LENGTH = 8;
+const MAX_DEVICES = 5;
+
+// compared against when the phone isn't found, so timing doesn't reveal which phones exist
+const DUMMY_HASH = bcrypt.hashSync("dummy-password", SALT_ROUNDS);
+
+/* ---------------------------- REGISTER ---------------------------- */
 
 export async function registerUser(input, { createdBy } = {}) {
   const { fullName, phone, email, role, parent, password } = input;
@@ -61,6 +71,34 @@ export async function registerUser(input, { createdBy } = {}) {
   }
 }
 
+/* ------------------------------ LOGIN ----------------------------- */
+
+async function storeRefreshToken(userId, token) {
+  // drop expired entries first (one update can't $pull and $push the same field)
+  await Credential.updateOne(
+    { user: userId },
+    { $pull: { refreshTokens: { expiresAt: { $lt: new Date() } } } }
+  );
+
+  // add this device's token, keeping only the newest MAX_DEVICES entries
+  await Credential.updateOne(
+    { user: userId },
+    {
+      $push: {
+        refreshTokens: {
+          $each: [
+            {
+              tokenHash: sha256(token),
+              expiresAt: getTokenExpiry(token),
+            },
+          ],
+          $slice: -MAX_DEVICES,
+        },
+      },
+    }
+  );
+}
+
 export async function loginUser({ phone, password }) {
   if (!phone || !password) {
     throw new AppError("Phone and password are required", 400);
@@ -80,41 +118,36 @@ export async function loginUser({ phone, password }) {
     throw new AppError("This account is suspended", 403);
   }
 
-  return {
-    user: user.toObject(),
-    accessToken: generateAccessToken(user),
-    refreshToken: generateRefreshToken(user),
-  };
+  const accessToken = generateAccessToken(user);
+  const refreshToken = generateRefreshToken(user);
+  await storeRefreshToken(user._id, refreshToken);
+
+  return { user: user.toObject(), accessToken, refreshToken };
 }
 
-export async function refreshTokens(accessToken, refreshToken) {
-  if (!accessToken || !refreshToken) {
-    throw new AppError("Access token and refresh token are required", 401);
-  }
+/* ----------------------------- REFRESH ---------------------------- */
 
-  let accessPayload, refreshPayload;
+// userId comes from the authenticate middleware (valid access token)
+export async function refreshTokens(refreshToken) {
+  const fail = (reason) => {
+    console.log("refresh failed:", reason); // server log only, remove later
+    throw new AppError("Invalid or expired token", 401);
+  };
+
+  if (!refreshToken) fail("no refresh cookie");
+
+  let payload;
   try {
-    // the access token may be expired, but its signature must be valid
-    accessPayload = jwt.verify(accessToken, process.env.ACCESS_TOKEN_SECRET, {
-      ignoreExpiration: true,
-    });
-    refreshPayload = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
+    payload = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
   } catch {
-    throw new AppError("Invalid or expired token", 401);
+    fail("refresh token invalid or expired");
   }
 
-  // both tokens must belong to the same user
-  if (accessPayload.id !== refreshPayload.id) {
-    throw new AppError("Invalid or expired token", 401);
-  }
-
-  const user = await User.findById(refreshPayload.id);
-  if (!user || user.status === "suspended") {
-    throw new AppError("Invalid or expired token", 401);
-  }
+  const user = await User.findById(payload.id);
+  if (!user || user.status === "suspended") fail("user missing or suspended");
 
   // rotate: swap the old hash for a new one in a single atomic update.
-  // if the old refresh token isn't in the database (logged out or already used), nothing matches.
+  // if the old token isn't in the database (logged out or already used), nothing matches.
   const newRefreshToken = generateRefreshToken(user);
   const updated = await Credential.findOneAndUpdate(
     {
@@ -129,11 +162,11 @@ export async function refreshTokens(accessToken, refreshToken) {
     {
       $set: {
         "refreshTokens.$.tokenHash": sha256(newRefreshToken),
-        "refreshTokens.$.expiresAt": new Date(Date.now() + REFRESH_TTL_MS),
+        "refreshTokens.$.expiresAt": getTokenExpiry(newRefreshToken),
       },
     }
   );
-  if (!updated) throw new AppError("Invalid or expired token", 401);
+  if (!updated) fail("refresh token not found in database");
 
   return {
     accessToken: generateAccessToken(user),
@@ -141,13 +174,19 @@ export async function refreshTokens(accessToken, refreshToken) {
   };
 }
 
+/* ------------------------------ LOGOUT ---------------------------- */
+
 // logs out this device, using the refresh cookie
 export async function logoutSession(refreshToken) {
   if (!refreshToken) return;
-  try {
-    const { sid, id } = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
-    await Session.deleteOne({ _id: sid, user: id });
-  } catch {
-    // token already invalid or expired, nothing to delete
-  }
+  const hash = sha256(refreshToken);
+  await Credential.updateOne(
+    { "refreshTokens.tokenHash": hash },
+    { $pull: { refreshTokens: { tokenHash: hash } } }
+  );
+}
+
+// logs out all devices
+export async function logoutAllSessions(userId) {
+  await Credential.updateOne({ user: userId }, { $set: { refreshTokens: [] } });
 }

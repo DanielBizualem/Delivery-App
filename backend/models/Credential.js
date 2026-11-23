@@ -14,6 +14,20 @@ const credentialSchema = new mongoose.Schema(
       required: true,
       select: false, // never returned unless explicitly requested
     },
+
+    // one entry per logged-in device; only hashes are stored, never the token itself
+    refreshTokens: {
+      type: [
+        {
+          _id: false,
+          tokenHash: { type: String, required: true },
+          expiresAt: { type: Date, required: true },
+        },
+      ],
+      default: [],
+      select: false,
+    },
+
     passwordChangedAt: { type: Date },
     failedAttempts: { type: Number, default: 0 },
     lockUntil: { type: Date },

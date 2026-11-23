@@ -1,8 +1,12 @@
-import { registerUser } from "../../services/auth/service.js";
+import {
+  registerUser,
+  loginUser,
+  refreshTokens,
+  logoutSession,
+  logoutAllSessions,
+} from "../../services/auth/service.js";
 import { AppError } from "../../utils/app-error.js";
 import { refreshCookie, clearCookie } from "../../utils/generateToken.js";
-import { loginUser } from "../../services/auth/service.js";
-import { refreshTokens } from "../../services/auth/service.js";
 
 const PRIVILEGED_ROLES = ["admin", "Courier"];
 
@@ -67,10 +71,7 @@ export async function login(req, res, next) {
 
 export async function refresh(req, res, next) {
   try {
-    const header = req.headers.authorization || "";
-    const accessToken = header.startsWith("Bearer ") ? header.slice(7) : null;
-
-    const tokens = await refreshTokens(accessToken, req.cookies?.refreshToken);
+    const tokens = await refreshTokens(req.cookies?.refreshToken);
 
     res.cookie("refreshToken", tokens.refreshToken, refreshCookie);
     res.json({ accessToken: tokens.accessToken });
@@ -90,3 +91,12 @@ export async function logout(req, res, next) {
   }
 }
 
+export async function logoutAll(req, res, next) {
+  try {
+    await logoutAllSessions(req.user._id);
+    res.clearCookie("refreshToken", clearCookie);
+    res.json({ message: "Logged out from all devices" });
+  } catch (err) {
+    next(err);
+  }
+}
