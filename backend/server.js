@@ -5,6 +5,7 @@ import cookieParser from "cookie-parser";
 import cors from "cors";
 import connectDB from "./config/db.js";
 import router from "./routers/auth/routes.js";
+import orderRoutes from './routers/order/routes.js';
 
 
 const app = express();
@@ -15,6 +16,7 @@ app.use(cors());
 app.use(express.json());
 app.use(cookieParser());
 app.use('/api/auth', router)
+app.use("/api/orders", orderRoutes);
 
 
 connectDB();

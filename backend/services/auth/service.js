@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-
+import CourierAvailability from "../../models/CourierAvailability.js";
 import Credential from "../../models/Credential.js";
 import User, { ROLES, normalizePhone } from "../../models/User.js";
 import { AppError } from "../../utils/app-error.js";
@@ -50,6 +50,10 @@ export async function registerUser(input, { createdBy } = {}) {
         session,
       });
 
+      if (role === "Courier") {
+        await CourierAvailability.create([{ courier: createdUser._id }], { session });
+      }
+      
       user = createdUser;
     });
 
