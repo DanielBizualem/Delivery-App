@@ -1,5 +1,4 @@
 import mongoose from "mongoose";
-import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import CourierAvailability from "../../models/CourierAvailability.js";
 import Credential from "../../models/Credential.js";
@@ -7,23 +6,22 @@ import User, { ROLES, normalizePhone } from "../../models/User.js";
 import { AppError } from "../../utils/app-error.js";
 import {
   generateAccessToken,
-  generateRefreshToken,getTokenExpiry,
+  generateRefreshToken,
+  getTokenExpiry,
   sha256,
 } from "../../utils/generateToken.js";
 
-const SALT_ROUNDS = 12;
 const MIN_PASSWORD_LENGTH = 8;
 const MAX_DEVICES = 5;
-
-// compared against when the phone isn't found, so timing doesn't reveal which phones exist
-const DUMMY_HASH = bcrypt.hashSync("dummy-password", SALT_ROUNDS);
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCK_MINUTES = 15;
 
 /* ---------------------------- REGISTER ---------------------------- */
 
 export async function registerUser(input, { createdBy } = {}) {
   const { fullName, phone, email, role, parent, password } = input;
 
-  if (!password || password.length < MIN_PASSWORD_LENGTH) {
+  if (typeof password !== "string" || password.length < MIN_PASSWORD_LENGTH) {
     throw new AppError(
       `Password must be at least ${MIN_PASSWORD_LENGTH} characters`,
       400
@@ -34,12 +32,11 @@ export async function registerUser(input, { createdBy } = {}) {
   }
 
   // hash outside the transaction so it doesn't hold the transaction open
-  const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
+  const passwordHash = await Credential.hashPassword(password);
 
   const session = await mongoose.startSession();
   try {
     let user;
-
     await session.withTransaction(async () => {
       const [createdUser] = await User.create(
         [{ fullName, phone, email, role, parent, createdBy }],
@@ -50,10 +47,11 @@ export async function registerUser(input, { createdBy } = {}) {
         session,
       });
 
+      // a new courier joins the available list at registration time
       if (role === "Courier") {
         await CourierAvailability.create([{ courier: createdUser._id }], { session });
       }
-      
+
       user = createdUser;
     });
 
@@ -103,8 +101,29 @@ async function storeRefreshToken(userId, token) {
   );
 }
 
+// counts a wrong password and locks the account after too many
+async function registerFailedAttempt(credentialId) {
+  const credential = await Credential.findByIdAndUpdate(
+    credentialId,
+    { $inc: { failedAttempts: 1 } },
+    { new: true }
+  );
+
+  if (credential.failedAttempts >= MAX_FAILED_ATTEMPTS) {
+    await Credential.updateOne(
+      { _id: credentialId },
+      {
+        $set: {
+          failedAttempts: 0,
+          lockUntil: new Date(Date.now() + LOCK_MINUTES * 60 * 1000),
+        },
+      }
+    );
+  }
+}
+
 export async function loginUser({ phone, password }) {
-  if (!phone || !password) {
+  if (typeof phone !== "string" || typeof password !== "string" || !phone || !password) {
     throw new AppError("Phone and password are required", 400);
   }
 
@@ -113,14 +132,36 @@ export async function loginUser({ phone, password }) {
     ? await Credential.findOne({ user: user._id }).select("+passwordHash")
     : null;
 
-  const ok = await bcrypt.compare(password, credential?.passwordHash ?? DUMMY_HASH);
-  if (!user || !credential || !ok) {
+  // a locked account is rejected before the password is checked,
+  // so guesses made during the lock can't be confirmed
+  if (credential?.isLocked) {
+    throw new AppError("Too many failed attempts, try again later", 429);
+  }
+
+  let ok = false;
+  if (credential) {
+    ok = await credential.comparePassword(password);
+  } else {
+    await Credential.fakeCompare(password); // keeps the response time the same
+  }
+
+  if (!ok) {
+    if (credential) await registerFailedAttempt(credential._id);
     throw new AppError("Invalid phone or password", 401);
   }
 
   if (user.status === "suspended") {
     throw new AppError("This account is suspended", 403);
   }
+
+  // correct password: clear the failure counter and record the login
+  await Credential.updateOne(
+    { _id: credential._id },
+    {
+      $set: { failedAttempts: 0, lastLoginAt: new Date() },
+      $unset: { lockUntil: "" },
+    }
+  );
 
   const accessToken = generateAccessToken(user);
   const refreshToken = generateRefreshToken(user);
@@ -131,7 +172,7 @@ export async function loginUser({ phone, password }) {
 
 /* ----------------------------- REFRESH ---------------------------- */
 
-// userId comes from the authenticate middleware (valid access token)
+// only the refresh token (from the httpOnly cookie) is needed; the user id is inside it
 export async function refreshTokens(refreshToken) {
   const fail = (reason) => {
     console.log("refresh failed:", reason); // server log only, remove later

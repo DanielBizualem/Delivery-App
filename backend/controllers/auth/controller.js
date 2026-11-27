@@ -12,7 +12,7 @@ const PRIVILEGED_ROLES = ["admin", "Courier"];
 
 export async function register(req, res, next) {
   try {
-    const { fullName, phone, email, role = "user", parent, password } = req.body;
+    const { fullName, phone, email, role = "user", parent, password } = req.body ?? {};
 
     if (!fullName || !phone) {
       throw new AppError("fullName and phone are required", 400);
@@ -48,7 +48,7 @@ export async function register(req, res, next) {
 
 export async function login(req, res, next) {
   try {
-    const { phone, password } = req.body;
+    const { phone, password } = req.body ?? {};
     const { user, accessToken, refreshToken } = await loginUser({ phone, password });
 
     res.cookie("refreshToken", refreshToken, refreshCookie);
