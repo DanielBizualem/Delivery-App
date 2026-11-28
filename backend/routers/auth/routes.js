@@ -1,18 +1,18 @@
 import { Router } from "express";
 import {
   register,
+  registerCourier,
   login,
   refresh,
   logout,
   logoutAll,
 } from "../../controllers/auth/controller.js";
-import { authenticate, optionalAuth } from "../../middleware/auth.js";
+import { authenticate, requireRole } from "../../middleware/auth.js";
 
 const router = Router();
 
-// optionalAuth sets req.user when a valid token is sent, but doesn't fail without one,
-// so anyone can register as "user" and only a logged-in admin can create admin/Courier
-router.post("/register", optionalAuth, register);
+router.post("/register", register);                                              // anyone, always role "user"
+router.post("/register-courier", authenticate, requireRole("admin"), registerCourier); // admin only
 router.post("/login", login);
 router.post("/refresh", refresh); // no authenticate: the access token is expired by then
 router.post("/logout", logout);
